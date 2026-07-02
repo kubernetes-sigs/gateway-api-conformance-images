@@ -1,6 +1,8 @@
 # See the OWNERS docs at https://go.k8s.io/owners
+# See the OWNERS_ALIASES file at https://github.com/kubernetes-sigs/gateway-api-conformance-images/blob/main/OWNERS_ALIASES for a list of members for each alias.
 
 approvers:
-- rikatz
-- robscott
-- youngnick
+  - sig-network-leads
+  - gateway-api-maintainers
+  - gateway-api-conformance-approvers
+  - gateway-api-release-managers

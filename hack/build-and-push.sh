@@ -64,16 +64,6 @@ if [[ "${BASE_REF}" != "main" ]]; then
   BINARY_TAG="${BASE_REF}"
 fi
 
-echo "Building and pushing echo-advanced image (from Istio) ...${BUILDX_PLATFORMS}"
-
-docker buildx build \
-  -t "${REGISTRY}/echo-advanced:${GIT_TAG}" \
-  -t "${REGISTRY}/echo-advanced:${VERSION_TAG}" \
-  --platform "${BUILDX_PLATFORMS}" \
-  ${DOCKER_PUSH_FLAG} \
-  -f docker/Dockerfile.echo-advanced \
-  .
-
 echo "Building and pushing echo-basic image ...${BUILDX_PLATFORMS}"
 
 docker buildx build \
@@ -82,4 +72,15 @@ docker buildx build \
   --platform "${BUILDX_PLATFORMS}" \
   ${DOCKER_PUSH_FLAG} \
   -f docker/Dockerfile.echo-basic \
+  .
+
+
+echo "Building and pushing echo-advanced image (from Istio) ...${BUILDX_PLATFORMS}"
+
+docker buildx build \
+  -t "${REGISTRY}/echo-advanced:${GIT_TAG}" \
+  -t "${REGISTRY}/echo-advanced:${VERSION_TAG}" \
+  --platform "${BUILDX_PLATFORMS}" \
+  ${DOCKER_PUSH_FLAG} \
+  -f docker/Dockerfile.echo-advanced \
   .

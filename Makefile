@@ -54,6 +54,15 @@ ROOT := $(abspath $(TOP))
 verify:
 	hack/verify-all.sh -v
 
+# Run generators for protos, Deepcopy funcs, CRDs, and docs.
+.PHONY: generate
+generate:
+	hack/update-protos.sh
+
+# Run go test against code
+test:
+	go test -race -cover ./...
+
 # Verify if support Docker Buildx.
 .PHONY: image.buildx.verify
 image.buildx.verify:
@@ -92,7 +101,4 @@ release-staging: image.multiarch.setup
 	hack/build-and-push.sh
 
 
-# Run generators for protos, Deepcopy funcs, CRDs, and docs.
-.PHONY: generate
-generate:
-	hack/update-protos.sh
+
