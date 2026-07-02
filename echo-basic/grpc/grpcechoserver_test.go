@@ -33,7 +33,7 @@ import (
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
-	pb "sigs.k8s.io/gateway-api/conformance/echo-basic/grpcechoserver"
+	pb "sigs.k8s.io/gateway-api-conformance-images/echo-basic/grpcechoserver"
 )
 
 const ServerAddress = "127.0.0.1"

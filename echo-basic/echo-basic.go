@@ -35,9 +35,9 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	g "sigs.k8s.io/gateway-api/conformance/echo-basic/grpc"
-	t "sigs.k8s.io/gateway-api/conformance/echo-basic/tcpserver"
-	u "sigs.k8s.io/gateway-api/conformance/echo-basic/udpechoserver"
+	g "sigs.k8s.io/gateway-api-conformance-images/echo-basic/grpc"
+	t "sigs.k8s.io/gateway-api-conformance-images/echo-basic/tcpserver"
+	u "sigs.k8s.io/gateway-api-conformance-images/echo-basic/udpechoserver"
 )
 
 // RequestAssertions contains information about the request and the Ingress

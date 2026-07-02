@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 
-	pb "sigs.k8s.io/gateway-api/conformance/echo-basic/grpcechoserver"
+	pb "sigs.k8s.io/gateway-api-conformance-images/echo-basic/grpcechoserver"
 )
 
 type serverConfig struct {

@@ -90,3 +90,9 @@ image.multiarch.setup: image.buildx.verify
 .PHONY: release-staging
 release-staging: image.multiarch.setup
 	hack/build-and-push.sh
+
+
+# Run generators for protos, Deepcopy funcs, CRDs, and docs.
+.PHONY: generate
+generate:
+	hack/update-protos.sh

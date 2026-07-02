@@ -107,7 +107,7 @@ formatters:
       simplify: true
     goimports:
       local-prefixes:
-        - sigs.k8s.io/gateway-api
+        - sigs.k8s.io/gateway-api-conformance-images
   exclusions:
     generated: lax
     paths:
