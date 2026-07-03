@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directories:
+    - "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - go
+      - dependencies
+      - ok-to-test
+      - release-note-none
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - docker
+      - dependencies
+      - ok-to-test
+      - release-note-none
+
+  #  Github actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "release-note-none"
+      - "ok-to-test"
+
+
