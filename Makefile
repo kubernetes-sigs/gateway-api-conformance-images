@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+IMAGE_REVIEWERS ?= @rikatz @youngnick @robscott @snorwin
+
 # We need all the Make variables exported as env vars.
 # Note that the ?= operator works regardless.
 
@@ -101,4 +103,22 @@ release-staging: image.multiarch.setup
 	hack/build-and-push.sh
 
 
+#### PROMOTION TARGETS
+KPROMO_VER := v4.5.1
+# KPROMO_PKG may have to be changed if KPROMO_VER increases its major version.
+KPROMO_PKG := sigs.k8s.io/promo-tools/v4/cmd/kpromo
+USER_FORK ?= $(shell git config --get remote.origin.url | cut -d: -f2 | cut -d/ -f1)
+TOOLS_DIR := hack/tools
+TOOLS_BIN_DIR := $(abspath $(TOOLS_DIR))/bin
+KPROMO := $(TOOLS_BIN_DIR)/kpromo
 
+.PHONY: promote-images
+promote-images: $(KPROMO)
+ifndef RELEASE_TAG
+	$(error RELEASE_TAG is not set. Usage: export RELEASE_TAG=v0.0.1 && make promote-images)
+endif
+	$(TOOLS_BIN_DIR)/kpromo pr --project gateway-api-conformance-images --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image echo-basic --image echo-advanced
+
+$(KPROMO):
+	mkdir -p $(TOOLS_BIN_DIR)
+	GOBIN=$(TOOLS_BIN_DIR) go install $(KPROMO_PKG)@$(KPROMO_VER)
