@@ -56,5 +56,3 @@ go.work.sum
 # AI tools
 .claude
 .codex
-
-hack/tools/
