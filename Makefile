@@ -1,4 +1,4 @@
-# Copyright 2026 The Kubernetes Authors.
+# Copyright The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+IMAGE_REVIEWERS ?= @rikatz @youngnick @robscott @snorwin
+
 # We need all the Make variables exported as env vars.
 # Note that the ?= operator works regardless.
 
@@ -19,7 +21,7 @@
 export GO111MODULE=on
 
 # The registry to push container images to.
-export REGISTRY ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api
+export REGISTRY ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-conformance-images
 
 # These are overridden by cloudbuild.yaml when run by Prow.
 
@@ -101,4 +103,13 @@ release-staging: image.multiarch.setup
 	hack/build-and-push.sh
 
 
+#### PROMOTION TARGETS
+KPROMO ?= go tool sigs.k8s.io/promo-tools/v4/cmd/kpromo
+USER_FORK := $(shell git config --get remote.origin.url | cut -d: -f2 | cut -d/ -f1)
+.PHONY: promote-images
+promote-images: 
+ifndef RELEASE_TAG
+	$(error RELEASE_TAG is not set. Usage: export RELEASE_TAG=v0.0.1 && make promote-images)
+endif
+	$(KPROMO) pr --project gateway-api-conformance-images --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image echo-basic --image echo-advanced
 
