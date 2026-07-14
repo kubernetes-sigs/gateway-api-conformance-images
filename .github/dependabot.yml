@@ -12,7 +12,7 @@ updates:
       - release-note-none
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/docker"
     schedule:
       interval: "weekly"
     labels:
