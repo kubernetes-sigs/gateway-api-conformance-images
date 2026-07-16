@@ -19,7 +19,8 @@ To release a new image:
     - Wait for the [promotion prow job](https://prow.k8s.io/?repo=kubernetes%2Fk8s.io&job=post-k8sio-image-promo) to complete successfully. Then verify that the production images are accessible:
 
      ```bash
-     docker pull registry.k8s.io/gateway-api-conformance-images/echo-basic:${RELEASE_TAG}
+     docker pull registry.k8s.io/gateway-api/conformance/echo-basic:${RELEASE_TAG}
+     docker pull registry.k8s.io/gateway-api/conformance/echo-advanced:${RELEASE_TAG}
      ```
 
 **Notes**:
