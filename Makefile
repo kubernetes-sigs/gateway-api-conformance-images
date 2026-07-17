@@ -21,7 +21,7 @@ IMAGE_REVIEWERS ?= @rikatz @youngnick @robscott @snorwin
 export GO111MODULE=on
 
 # The registry to push container images to.
-export REGISTRY ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api-conformance-images
+export REGISTRY ?= us-central1-docker.pkg.dev/k8s-staging-images/gateway-api
 
 # These are overridden by cloudbuild.yaml when run by Prow.
 
@@ -102,7 +102,6 @@ image.multiarch.setup: image.buildx.verify
 release-staging: image.multiarch.setup
 	hack/build-and-push.sh
 
-
 #### PROMOTION TARGETS
 KPROMO ?= go tool sigs.k8s.io/promo-tools/v4/cmd/kpromo
 USER_FORK := $(shell git config --get remote.origin.url | cut -d: -f2 | cut -d/ -f1)
@@ -111,5 +110,5 @@ promote-images:
 ifndef RELEASE_TAG
 	$(error RELEASE_TAG is not set. Usage: export RELEASE_TAG=v0.0.1 && make promote-images)
 endif
-	$(KPROMO) pr --project gateway-api-conformance-images --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image echo-basic --image echo-advanced
+	$(KPROMO) pr --project gateway-api --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image conformance/echo-basic --image conformance/echo-advanced
 

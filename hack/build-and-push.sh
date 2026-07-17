@@ -67,8 +67,8 @@ fi
 echo "Building and pushing echo-basic image ...${BUILDX_PLATFORMS}"
 
 docker buildx build \
-  -t "${REGISTRY}/echo-basic:${GIT_TAG}" \
-  -t "${REGISTRY}/echo-basic:${VERSION_TAG}" \
+  -t "${REGISTRY}/conformance/echo-basic:${GIT_TAG}" \
+  -t "${REGISTRY}/conformance/echo-basic:${VERSION_TAG}" \
   --platform "${BUILDX_PLATFORMS}" \
   ${DOCKER_PUSH_FLAG} \
   -f docker/Dockerfile.echo-basic \
@@ -78,8 +78,8 @@ docker buildx build \
 echo "Building and pushing echo-advanced image (from Istio) ...${BUILDX_PLATFORMS}"
 
 docker buildx build \
-  -t "${REGISTRY}/echo-advanced:${GIT_TAG}" \
-  -t "${REGISTRY}/echo-advanced:${VERSION_TAG}" \
+  -t "${REGISTRY}/conformance/echo-advanced:${GIT_TAG}" \
+  -t "${REGISTRY}/conformance/echo-advanced:${VERSION_TAG}" \
   --platform "${BUILDX_PLATFORMS}" \
   ${DOCKER_PUSH_FLAG} \
   -f docker/Dockerfile.echo-advanced \
