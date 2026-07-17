@@ -110,5 +110,5 @@ promote-images:
 ifndef RELEASE_TAG
 	$(error RELEASE_TAG is not set. Usage: export RELEASE_TAG=v0.0.1 && make promote-images)
 endif
-	$(KPROMO) pr --project gateway-api --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image conformance/echo-basic --image conformance/echo-advanced
+	$(KPROMO) pr --project gateway-api --staging-repo us-central1-docker.pkg.dev/k8s-staging-images/gateway-api --tag $(RELEASE_TAG) --reviewers "$(IMAGE_REVIEWERS)" --fork $(USER_FORK) --image conformance/echo-basic --image conformance/echo-advanced
 
