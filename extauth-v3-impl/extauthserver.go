@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -101,22 +102,21 @@ func main() {
 	httpPort := envPort("HTTP_PORT", 9002)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	// Start gRPC ext_authz server.
 	lc := net.ListenConfig{}
 	grpcLis, err := lc.Listen(ctx, "tcp", fmt.Sprintf("0.0.0.0:%d", grpcPort))
 	if err != nil {
-		fmt.Printf("grpc: failed to listen: %v\n", err)
-		os.Exit(1)
+		stop()
+		log.Fatalf("grpc: failed to listen: %v\n", err)
 	}
 	grpcServer := grpc.NewServer()
 	authv3.RegisterAuthorizationServer(grpcServer, &grpcAuthServer{})
 	fmt.Printf("grpc ext_authz server listening on %s\n", grpcLis.Addr())
 	go func() {
 		if err := grpcServer.Serve(grpcLis); err != nil {
-			fmt.Printf("grpc: serve error: %v\n", err)
-			os.Exit(1)
+			stop()
+			log.Fatalf("grpc: serve error: %v\n", err)
 		}
 	}()
 
@@ -127,12 +127,14 @@ func main() {
 	fmt.Printf("http ext_authz server listening on %s\n", httpServer.Addr)
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("http: serve error: %v\n", err)
-			os.Exit(1)
+			stop()
+			log.Fatalf("http: serve error: %v\n", err)
 		}
 	}()
 
 	<-ctx.Done()
 	grpcServer.GracefulStop()
 	_ = httpServer.Shutdown(context.Background()) //nolint:contextcheck
+	fmt.Print("listeners closed")
+	stop()
 }
