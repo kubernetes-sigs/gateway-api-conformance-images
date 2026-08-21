@@ -20,6 +20,10 @@ updates:
       - dependencies
       - ok-to-test
       - release-note-none
+    ignore:
+      - dependency-name: "golang"
+        versions:
+          - "*rc*"
 
   #  Github actions updates
   - package-ecosystem: "github-actions"
