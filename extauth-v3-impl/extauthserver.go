@@ -17,8 +17,22 @@ limitations under the License.
 // implements a conformance test server that speaks both the Envoy ext_authz
 // v3 gRPC protocol and the HTTP external-auth protocol.
 //
-// Authorization logic: requests whose path equals /allowed are permitted;
-// all other paths are denied with a 403 / PermissionDenied response.
+// Authorization logic: requests whose path has the prefix /grpc/allowed or
+// /http/allowed are permitted; all other paths are denied with a 403 /
+// PermissionDenied response.
+//
+// Fixed response headers on every OK response:
+//   - X-User-Id: 42  (let conformance tests verify allowedResponseHeaders)
+//
+// Fixed response headers on every denial response:
+//   - X-Auth-Error: access-denied  (let conformance tests verify client-header passthrough)
+//
+// Header echoing on OK responses: any request header whose canonical name
+// starts with "X-" is echoed back as "X-Auth-Received-<rest>". For HTTP this
+// means setting that name as an HTTP response header; for gRPC it means
+// including it in OkHttpResponse.Headers (added to the upstream request by the
+// gateway). This allows conformance tests to verify which client headers were
+// forwarded to the auth server via the allowedHeaders filter option.
 package main
 
 import (
@@ -27,11 +41,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	authv3 "github.com/envoyproxy/go-control-plane/envoy/service/auth/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	statuspb "google.golang.org/genproto/googleapis/rpc/status"
@@ -40,9 +57,9 @@ import (
 )
 
 const (
-	grpcAllowedPath = "/grpc/allowed"
-	httpAllowedPath = "/http/allowed"
-	deniedBody      = "Access denied by external auth server"
+	grpcAllowedPrefix = "/grpc/allowed"
+	httpAllowedPrefix = "/http/allowed"
+	deniedBody        = "Access denied by external auth server"
 )
 
 type grpcAuthServer struct {
@@ -53,11 +70,36 @@ func (s *grpcAuthServer) Check(_ context.Context, req *authv3.CheckRequest) (*au
 	path := req.GetAttributes().GetRequest().GetHttp().GetPath()
 	fmt.Printf("grpc check: path=%q\n", path)
 
-	if path == grpcAllowedPath {
+	// Echo X-* request headers back as X-Auth-Received-* in OkHttpResponse.Headers
+	// so that the gateway adds them to the upstream request. gRPC/HTTP2 headers are
+	// lowercased, so canonicalize before checking the prefix.
+	//
+	// Also include the fixed X-User-Id header so conformance tests can verify that
+	// headers from the auth OK response are forwarded to the upstream backend.
+	hdrs := req.GetAttributes().GetRequest().GetHttp().GetHeaders()
+	okHdrs := make([]*corev3.HeaderValueOption, 0, len(hdrs)+1)
+	okHdrs = append(okHdrs, &corev3.HeaderValueOption{
+		Header: &corev3.HeaderValue{Key: "X-User-Id", Value: "42"},
+	})
+	for key, val := range hdrs {
+		canonical := textproto.CanonicalMIMEHeaderKey(key)
+		if suffix, ok := strings.CutPrefix(canonical, "X-"); ok {
+			okHdrs = append(okHdrs, &corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:   "X-Auth-Received-" + suffix,
+					Value: val,
+				},
+			})
+		}
+	}
+
+	if strings.HasPrefix(path, grpcAllowedPrefix) {
 		return &authv3.CheckResponse{
 			Status: &statuspb.Status{Code: int32(codes.OK)},
 			HttpResponse: &authv3.CheckResponse_OkResponse{
-				OkResponse: &authv3.OkHttpResponse{},
+				OkResponse: &authv3.OkHttpResponse{
+					Headers: okHdrs,
+				},
 			},
 		}, nil
 	}
@@ -67,7 +109,10 @@ func (s *grpcAuthServer) Check(_ context.Context, req *authv3.CheckRequest) (*au
 		HttpResponse: &authv3.CheckResponse_DeniedResponse{
 			DeniedResponse: &authv3.DeniedHttpResponse{
 				Status: &typev3.HttpStatus{Code: typev3.StatusCode_Forbidden},
-				Body:   deniedBody,
+				Headers: []*corev3.HeaderValueOption{
+					{Header: &corev3.HeaderValue{Key: "X-Auth-Error", Value: "access-denied"}},
+				},
+				Body: deniedBody,
 			},
 		},
 	}, nil
@@ -77,10 +122,24 @@ func httpAuthHandler(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	fmt.Printf("http check: path=%q\n", path)
 
-	if path == httpAllowedPath {
+	if strings.HasPrefix(path, httpAllowedPrefix) {
+		// Echo X-* request headers back as X-Auth-Received-* response headers so
+		// that the gateway can forward them to the upstream via allowedResponseHeaders.
+		// Go's net/http canonicalizes header names, so the "X-" prefix check is safe.
+		for key, vals := range r.Header {
+			if suffix, ok := strings.CutPrefix(key, "X-"); ok {
+				w.Header().Set("X-Auth-Received-"+suffix, strings.Join(vals, ","))
+			}
+		}
+		// Fixed header so conformance tests can verify allowedResponseHeaders forwarding.
+		w.Header().Set("X-User-Id", "42")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+
+	// Denial: include a fixed header so conformance tests can verify that auth
+	// server response headers are passed through to the client.
+	w.Header().Set("X-Auth-Error", "access-denied")
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = fmt.Fprint(w, deniedBody)
 }
