@@ -21,23 +21,35 @@ limitations under the License.
 // /http/allowed are permitted; all other paths are denied with a 403 /
 // PermissionDenied response.
 //
-// Fixed response headers on every OK response:
-//   - X-User-Id: 42  (let conformance tests verify allowedResponseHeaders)
+// Every response (OK and denial, HTTP and gRPC) carries the following headers:
 //
-// Fixed response headers on every denial response:
-//   - X-Auth-Error: access-denied  (let conformance tests verify client-header passthrough)
+//	X-Auth-Received-Body-Size: <N>
+//	    Number of body bytes the auth server received. Lets conformance tests
+//	    verify that forwardBody.maxSize is honored: expect N == sent size when
+//	    forwarding is enabled, and N == 0 when maxSize is 0.
 //
-// Header echoing on OK responses: any request header whose canonical name
-// starts with "X-" is echoed back as "X-Auth-Received-<rest>". For HTTP this
-// means setting that name as an HTTP response header; for gRPC it means
-// including it in OkHttpResponse.Headers (added to the upstream request by the
-// gateway). This allows conformance tests to verify which client headers were
-// forwarded to the auth server via the allowedHeaders filter option.
+// Additional headers on OK responses only:
+//
+//	X-User-Id: 42
+//	    Fixed header; lets conformance tests verify allowedResponseHeaders
+//	    forwarding to the upstream backend.
+//
+//	X-Auth-Received-<Suffix>: <value>
+//	    Echo of each client request header named X-<Suffix>. Lets conformance
+//	    tests verify which headers were forwarded to the auth server via the
+//	    allowedHeaders filter option.
+//
+// Additional headers on denial responses only:
+//
+//	X-Auth-Error: access-denied
+//	    Fixed header; lets conformance tests verify that auth server denial
+//	    headers are passed through to the client.
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -67,20 +79,24 @@ type grpcAuthServer struct {
 }
 
 func (s *grpcAuthServer) Check(_ context.Context, req *authv3.CheckRequest) (*authv3.CheckResponse, error) {
-	path := req.GetAttributes().GetRequest().GetHttp().GetPath()
+	attrs := req.GetAttributes().GetRequest().GetHttp()
+	path := attrs.GetPath()
 	fmt.Printf("grpc check: path=%q\n", path)
 
+	// body and raw_body are mutually exclusive: one is populated, the other is empty.
+	bodySize := len(attrs.GetBody()) + len(attrs.GetRawBody())
+	bodySizeStr := strconv.Itoa(bodySize)
+
+	// Build OK response headers: fixed user-id, body-size report, and X-* echoes.
+	hdrs := attrs.GetHeaders()
+	okHdrs := make([]*corev3.HeaderValueOption, 0, len(hdrs)+2)
+	okHdrs = append(okHdrs,
+		&corev3.HeaderValueOption{Header: &corev3.HeaderValue{Key: "X-User-Id", Value: "42"}},
+		&corev3.HeaderValueOption{Header: &corev3.HeaderValue{Key: "X-Auth-Received-Body-Size", Value: bodySizeStr}},
+	)
 	// Echo X-* request headers back as X-Auth-Received-* in OkHttpResponse.Headers
 	// so that the gateway adds them to the upstream request. gRPC/HTTP2 headers are
 	// lowercased, so canonicalize before checking the prefix.
-	//
-	// Also include the fixed X-User-Id header so conformance tests can verify that
-	// headers from the auth OK response are forwarded to the upstream backend.
-	hdrs := req.GetAttributes().GetRequest().GetHttp().GetHeaders()
-	okHdrs := make([]*corev3.HeaderValueOption, 0, len(hdrs)+1)
-	okHdrs = append(okHdrs, &corev3.HeaderValueOption{
-		Header: &corev3.HeaderValue{Key: "X-User-Id", Value: "42"},
-	})
 	for key, val := range hdrs {
 		canonical := textproto.CanonicalMIMEHeaderKey(key)
 		if suffix, ok := strings.CutPrefix(canonical, "X-"); ok {
@@ -111,6 +127,7 @@ func (s *grpcAuthServer) Check(_ context.Context, req *authv3.CheckRequest) (*au
 				Status: &typev3.HttpStatus{Code: typev3.StatusCode_Forbidden},
 				Headers: []*corev3.HeaderValueOption{
 					{Header: &corev3.HeaderValue{Key: "X-Auth-Error", Value: "access-denied"}},
+					{Header: &corev3.HeaderValue{Key: "X-Auth-Received-Body-Size", Value: bodySizeStr}},
 				},
 				Body: deniedBody,
 			},
@@ -122,6 +139,13 @@ func httpAuthHandler(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	fmt.Printf("http check: path=%q\n", path)
 
+	// Measure the forwarded body. ReadAll is safe when Body is nil.
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, _ = io.ReadAll(r.Body)
+	}
+	bodySizeStr := strconv.Itoa(len(bodyBytes))
+
 	if strings.HasPrefix(path, httpAllowedPrefix) {
 		// Echo X-* request headers back as X-Auth-Received-* response headers so
 		// that the gateway can forward them to the upstream via allowedResponseHeaders.
@@ -131,15 +155,14 @@ func httpAuthHandler(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("X-Auth-Received-"+suffix, strings.Join(vals, ","))
 			}
 		}
-		// Fixed header so conformance tests can verify allowedResponseHeaders forwarding.
 		w.Header().Set("X-User-Id", "42")
+		w.Header().Set("X-Auth-Received-Body-Size", bodySizeStr)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// Denial: include a fixed header so conformance tests can verify that auth
-	// server response headers are passed through to the client.
 	w.Header().Set("X-Auth-Error", "access-denied")
+	w.Header().Set("X-Auth-Received-Body-Size", bodySizeStr)
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = fmt.Fprint(w, deniedBody)
 }
