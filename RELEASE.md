@@ -21,6 +21,7 @@ To release a new image:
      ```bash
      docker pull registry.k8s.io/gateway-api/conformance/echo-basic:${RELEASE_TAG}
      docker pull registry.k8s.io/gateway-api/conformance/echo-advanced:${RELEASE_TAG}
+     docker pull registry.k8s.io/gateway-api/conformance/extauth-v3-impl:${RELEASE_TAG}
      ```
 
 **Notes**:

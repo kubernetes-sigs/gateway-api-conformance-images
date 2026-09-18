@@ -84,3 +84,14 @@ docker buildx build \
   ${DOCKER_PUSH_FLAG} \
   -f docker/Dockerfile.echo-advanced \
   .
+
+
+echo "Building and pushing extauth-v3-impl image ...${BUILDX_PLATFORMS}"
+
+docker buildx build \
+  -t "${REGISTRY}/conformance/extauth-v3-impl:${GIT_TAG}" \
+  -t "${REGISTRY}/conformance/extauth-v3-impl:${VERSION_TAG}" \
+  --platform "${BUILDX_PLATFORMS}" \
+  ${DOCKER_PUSH_FLAG} \
+  -f docker/Dockerfile.extauth-v3-impl \
+  .
