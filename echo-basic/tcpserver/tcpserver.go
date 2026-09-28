@@ -63,6 +63,7 @@ type tcpServer struct {
 	tcpPort   string
 	tlsPort   string
 	tlsConfig *tls.Config
+	handler   func(context.Context, net.Conn)
 }
 
 var podContext Context
@@ -119,6 +120,11 @@ func runServer(ctx context.Context, errchan chan error) {
 		tcpPort:   tcpPort,
 		tlsPort:   tlsPort,
 		tlsConfig: tlsConfig,
+		handler:   handleConnection,
+	}
+
+	if os.Getenv("TCP_MODE") == "RESET" {
+		server.handler = resetConnection
 	}
 
 	go func() {
@@ -164,7 +170,7 @@ func (s *tcpServer) startListener(ctx context.Context, tlsListener bool) error {
 			slog.Error("Accept error", "error", err)
 			continue
 		}
-		go handleConnection(ctx, conn)
+		go s.handler(ctx, conn)
 	}
 }
 
@@ -219,7 +225,7 @@ func handleConnection(ctx context.Context, conn net.Conn) {
 	}
 
 	assertions.IsTLS = isTLS
-	fmt.Fprint(conn, (WelcomeMessage))
+	fmt.Fprint(conn, WelcomeMessage)
 
 	testPayload, err := json.Marshal(assertions)
 	if err != nil {
@@ -242,5 +248,14 @@ func handleConnection(ctx context.Context, conn net.Conn) {
 		case "PING":
 			fmt.Fprintf(conn, "PONG\n")
 		}
+	}
+}
+
+// resetConnection resets the connection by sending a RST packet instead of FIN
+func resetConnection(_ context.Context, conn net.Conn) {
+	defer conn.Close()
+
+	if tcp, ok := conn.(*net.TCPConn); ok {
+		_ = tcp.SetLinger(0)
 	}
 }
