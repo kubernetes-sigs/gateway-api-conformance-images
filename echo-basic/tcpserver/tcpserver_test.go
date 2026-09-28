@@ -25,12 +25,14 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -205,6 +207,35 @@ func TestTCPEchoServer(t *testing.T) {
 				CipherSuite: "TLS_AES_128_GCM_SHA256",
 			}
 			assertTestMessage(t, payload, expectedTLS)
+		})
+	})
+
+	t.Run("with TCP mode reset", func(t *testing.T) {
+		tcpPort, err := getFreePort(ctx)
+		require.NoError(t, err, "error allocating TCP Port for test")
+
+		t.Logf("Using %d as TCP Port", tcpPort)
+		t.Setenv("TCP_PORT", strconv.Itoa(tcpPort))
+
+		t.Setenv("TCP_MODE", "RESET")
+
+		errCh := make(chan error)
+		go runServer(ctx, errCh)
+		t.Cleanup(func() { close(errCh) })
+		waitForListener(ctx, t, strconv.Itoa(tcpPort))
+
+		dialer := &net.Dialer{}
+
+		tcpClient, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("localhost:%s", strconv.Itoa(tcpPort)))
+		require.NoError(t, err, "got an error while trying to connect to tcpserver")
+
+		t.Cleanup(func() {
+			tcpClient.Close() //nolint: errcheck
+		})
+		t.Run("check against the TCP server", func(t *testing.T) {
+			_, wErr := fmt.Fprintf(tcpClient, "PING\n")
+			_, rErr := tcpClient.Read(make([]byte, 1))
+			assert.ErrorIs(t, errors.Join(wErr, rErr), syscall.ECONNRESET, "server should reset connection")
 		})
 	})
 }
