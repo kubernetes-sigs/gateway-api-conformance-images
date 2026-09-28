@@ -25,6 +25,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -232,8 +233,9 @@ func TestTCPEchoServer(t *testing.T) {
 			tcpClient.Close() //nolint: errcheck
 		})
 		t.Run("check against the TCP server", func(t *testing.T) {
-			_, err := fmt.Fprintf(tcpClient, "PING\n")
-			assert.ErrorIs(t, err, syscall.ECONNRESET, "server should reset connection")
+			_, wErr := fmt.Fprintf(tcpClient, "PING\n")
+			_, rErr := tcpClient.Read(make([]byte, 1))
+			assert.ErrorIs(t, errors.Join(wErr, rErr), syscall.ECONNRESET, "server should reset connection")
 		})
 	})
 }
