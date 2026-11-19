@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -24,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -248,6 +250,70 @@ func TestEchoHandler_RequestBodySHA256IgnoresClientSetHeader(t *testing.T) {
 	sum := sha256.Sum256([]byte(body))
 	if got, want := resp.Header.Values(requestBodySHA256Header), []string{hex.EncodeToString(sum[:])}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("Expected %s values %v, but got %v", requestBodySHA256Header, want, got)
+	}
+}
+
+// A form body that ends before its Content-Length must fail, even though form parsing drops the read error.
+// The check needs a real connection, because only the server's body reader turns the early end into a later EOF.
+func TestEchoHandler_TruncatedFormBodyFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(echoHandler))
+	defer server.Close()
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(conn, "POST / HTTP/1.1\r\nHost: echo\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\na=b"); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, but got %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if got := resp.Header.Get(requestBodySHA256Header); got != "" {
+		t.Errorf("Expected no %s header on the error response, but got %s", requestBodySHA256Header, got)
+	}
+}
+
+// A client that sends Expect: 100-continue and waits must get an early error without uploading the body.
+func TestEchoHandler_EarlyErrorWithExpectContinue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(echoHandler))
+	defer server.Close()
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(conn, "POST /?delay=invalid HTTP/1.1\r\nHost: echo\r\nContent-Type: application/json\r\nContent-Length: 10\r\nExpect: 100-continue\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("Expected the error response before the body is sent, but got %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, but got %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if got := resp.Header.Get(requestBodySHA256Header); got != "" {
+		t.Errorf("Expected no %s header on the error response, but got %s", requestBodySHA256Header, got)
 	}
 }
 
