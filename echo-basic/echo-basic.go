@@ -17,8 +17,10 @@ limitations under the License.
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -79,6 +81,9 @@ type Context struct {
 	Service   string `json:"service"`
 	Pod       string `json:"pod"`
 }
+
+// requestBodySHA256Header is the response header that carries the hex-encoded SHA-256 digest of the request body received by the echo server.
+const requestBodySHA256Header = "X-Echo-Request-Body-Sha256"
 
 var (
 	context  Context
@@ -242,8 +247,8 @@ func (r *retrySimulation) retrySimulationHandler(w http.ResponseWriter, request 
 	}
 
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	if r.attempts[uuid] < succeedAfter {
+		defer r.mutex.Unlock()
 		r.attempts[uuid]++
 
 		// If the request has form ?delayRetry=[:duration], wait for that
@@ -260,6 +265,8 @@ func (r *retrySimulation) retrySimulationHandler(w http.ResponseWriter, request 
 
 		return
 	}
+	// echoHandler reads the request body, so it runs without the lock and a slow upload does not hold up other retry requests.
+	r.mutex.Unlock()
 
 	echoHandler(w, request)
 }
@@ -307,6 +314,13 @@ func runH2CServer(h2cPort string, errchan chan<- error) {
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Echoing back request made to %s to client (%s)\n", r.RequestURI, r.RemoteAddr)
 
+	// Every byte read from the body also goes to the hasher, so form parsing below still sees the body and nothing is buffered.
+	bodyHash := sha256.New()
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.TeeReader(r.Body, bodyHash), r.Body}
+
 	// If the request has form ?delay=[:duration] wait for duration
 	// For example, ?delay=10s will cause the response to wait 10s before responding
 	if err := delayResponse(r, "delay"); err != nil {
@@ -333,9 +347,22 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The rest of the body, which form parsing may not have read, completes the digest.
+	if _, err := io.Copy(io.Discard, r.Body); err != nil {
+		processError(w, err, http.StatusInternalServerError)
+		return
+	}
+
 	writeEchoResponseHeaders(w, r.Header)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The digest header is the server's own, so a client-set header of the same name in any case must not sit beside it.
+	for name := range w.Header() {
+		if strings.EqualFold(name, requestBodySHA256Header) {
+			delete(w.Header(), name)
+		}
+	}
+	w.Header().Set(requestBodySHA256Header, hex.EncodeToString(bodyHash.Sum(nil)))
 	_, _ = w.Write(js)
 }
 
