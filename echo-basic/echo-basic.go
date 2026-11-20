@@ -17,12 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
@@ -79,6 +82,9 @@ type Context struct {
 	Service   string `json:"service"`
 	Pod       string `json:"pod"`
 }
+
+// requestBodySHA256Header is the response header that carries the hex-encoded SHA-256 digest of the request body received by the echo server.
+const requestBodySHA256Header = "X-Echo-Request-Body-Sha256"
 
 var (
 	context  Context
@@ -242,8 +248,8 @@ func (r *retrySimulation) retrySimulationHandler(w http.ResponseWriter, request 
 	}
 
 	r.mutex.Lock()
-	defer r.mutex.Unlock()
 	if r.attempts[uuid] < succeedAfter {
+		defer r.mutex.Unlock()
 		r.attempts[uuid]++
 
 		// If the request has form ?delayRetry=[:duration], wait for that
@@ -260,6 +266,8 @@ func (r *retrySimulation) retrySimulationHandler(w http.ResponseWriter, request 
 
 		return
 	}
+	// echoHandler reads the request body, so it runs without the lock and a slow upload does not hold up other retry requests.
+	r.mutex.Unlock()
 
 	echoHandler(w, request)
 }
@@ -307,9 +315,20 @@ func runH2CServer(h2cPort string, errchan chan<- error) {
 func echoHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Echoing back request made to %s to client (%s)\n", r.RequestURI, r.RemoteAddr)
 
+	// Every byte read from the body also goes to the hasher, so form parsing below still sees the body and nothing is buffered.
+	body := r.Body
+	bodyReader := &hashingReader{reader: body, hash: sha256.New()}
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{bodyReader, body}
+
 	// If the request has form ?delay=[:duration] wait for duration
 	// For example, ?delay=10s will cause the response to wait 10s before responding
-	if err := delayResponse(r, "delay"); err != nil {
+	err := delayResponse(r, "delay")
+	// The server checks the body's own type when it writes the response, for example to answer Expect: 100-continue without waiting for the body.
+	r.Body = body
+	if err != nil {
 		processError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -333,10 +352,44 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The rest of the body, which form parsing may not have read, completes the digest.
+	_, err = io.Copy(io.Discard, bodyReader)
+	// Form parsing drops a read error and the body then reports EOF, so the error kept by the reader also fails the request.
+	if bodyReader.err != nil {
+		err = bodyReader.err
+	}
+	if err != nil {
+		processError(w, err, http.StatusInternalServerError)
+		return
+	}
+
 	writeEchoResponseHeaders(w, r.Header)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The digest header is the server's own, so a client-set header of the same name in any case must not sit beside it.
+	for name := range w.Header() {
+		if strings.EqualFold(name, requestBodySHA256Header) {
+			delete(w.Header(), name)
+		}
+	}
+	w.Header().Set(requestBodySHA256Header, hex.EncodeToString(bodyReader.hash.Sum(nil)))
 	_, _ = w.Write(js)
+}
+
+// hashingReader writes every byte read from reader to hash and keeps the first read error other than io.EOF.
+type hashingReader struct {
+	reader io.Reader
+	hash   hash.Hash
+	err    error
+}
+
+func (h *hashingReader) Read(p []byte) (int, error) {
+	n, err := h.reader.Read(p)
+	_, _ = h.hash.Write(p[:n])
+	if err != nil && !errors.Is(err, io.EOF) && h.err == nil {
+		h.err = err
+	}
+	return n, err
 }
 
 func writeEchoResponseHeaders(w http.ResponseWriter, headers http.Header) {

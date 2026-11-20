@@ -17,14 +17,21 @@ limitations under the License.
 package main
 
 import (
+	"bufio"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestHealthHandler(t *testing.T) {
@@ -174,6 +181,205 @@ func TestEchoHandler(t *testing.T) {
 	if responseAssertions.Namespace != expectedNamespace {
 		t.Errorf("Expected X-Content-Type-Options header %s, but got %s", expectedNamespace, responseAssertions.Namespace)
 	}
+}
+
+func TestEchoHandler_RequestBodySHA256(t *testing.T) {
+	sha256Hex := func(s string) string {
+		sum := sha256.Sum256([]byte(s))
+		return hex.EncodeToString(sum[:])
+	}
+
+	tests := []struct {
+		name        string
+		method      string
+		contentType string
+		body        string
+		wantStatus  int
+	}{
+		{name: "no body", method: http.MethodGet, wantStatus: http.StatusOK},
+		{name: "json body", method: http.MethodPost, contentType: "application/json", body: `{"model":"m","prompt":"p"}`, wantStatus: http.StatusOK},
+		// The form body is still parsed for ?delay while the digest is taken.
+		{name: "form body with delay", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", body: "delay=1ms", wantStatus: http.StatusOK},
+		{name: "form body with invalid delay", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", body: "delay=invalid", wantStatus: http.StatusInternalServerError},
+		// The form parser stops at 10 MB, so the digest must also cover the bytes it never read.
+		{name: "form body over the form parser's limit", method: http.MethodPost, contentType: "application/x-www-form-urlencoded", body: "a=" + strings.Repeat("x", 11<<20), wantStatus: http.StatusOK},
+		{name: "multipart body with delay", method: http.MethodPost, contentType: "multipart/form-data; boundary=b", body: "--b\r\nContent-Disposition: form-data; name=\"delay\"\r\n\r\n1ms\r\n--b--\r\n", wantStatus: http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequestWithContext(t.Context(), tc.method, "/", strings.NewReader(tc.body))
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			rr := httptest.NewRecorder()
+
+			echoHandler(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("Expected status code %d, but got %d", tc.wantStatus, rr.Code)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			if got, want := rr.Header().Get(requestBodySHA256Header), sha256Hex(tc.body); got != want {
+				t.Errorf("Expected %s header %s, but got %s", requestBodySHA256Header, want, got)
+			}
+		})
+	}
+}
+
+// A client that asks the server to echo its own digest header, in another case, must still read only the server's digest.
+// The check goes through a real HTTP server, because the recorder keeps the two header names apart.
+func TestEchoHandler_RequestBodySHA256IgnoresClientSetHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(echoHandler))
+	defer server.Close()
+
+	body := `{"prompt":"p"}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Echo-Set-Header", "X-Echo-Request-Body-SHA256:bogus")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	sum := sha256.Sum256([]byte(body))
+	if got, want := resp.Header.Values(requestBodySHA256Header), []string{hex.EncodeToString(sum[:])}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("Expected %s values %v, but got %v", requestBodySHA256Header, want, got)
+	}
+}
+
+// A form body that ends before its Content-Length must fail, even though form parsing drops the read error.
+// The check needs a real connection, because only the server's body reader turns the early end into a later EOF.
+func TestEchoHandler_TruncatedFormBodyFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(echoHandler))
+	defer server.Close()
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(conn, "POST / HTTP/1.1\r\nHost: echo\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 100\r\n\r\na=b"); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, but got %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if got := resp.Header.Get(requestBodySHA256Header); got != "" {
+		t.Errorf("Expected no %s header on the error response, but got %s", requestBodySHA256Header, got)
+	}
+}
+
+// A client that sends Expect: 100-continue and waits must get an early error without uploading the body.
+func TestEchoHandler_EarlyErrorWithExpectContinue(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(echoHandler))
+	defer server.Close()
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(conn, "POST /?delay=invalid HTTP/1.1\r\nHost: echo\r\nContent-Type: application/json\r\nContent-Length: 10\r\nExpect: 100-continue\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("Expected the error response before the body is sent, but got %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, but got %d", http.StatusInternalServerError, resp.StatusCode)
+	}
+	if got := resp.Header.Get(requestBodySHA256Header); got != "" {
+		t.Errorf("Expected no %s header on the error response, but got %s", requestBodySHA256Header, got)
+	}
+}
+
+// A retry request whose upload never finishes must not hold up a request for another uuid.
+// Both have succeedAfter=0, so both go straight to echoHandler, which reads the body.
+func TestRetrySimulation_SlowUploadDoesNotBlockOtherRequests(t *testing.T) {
+	sim := &retrySimulation{attempts: make(map[string]int)}
+	// The slow request's body reports its first read, which happens inside echoHandler, so the test knows the handler is past the lock.
+	reading := make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("uuid") == "slow" {
+			r.Body = &firstReadSignal{ReadCloser: r.Body, signal: func() { once.Do(func() { close(reading) }) }}
+		}
+		sim.retrySimulationHandler(w, r)
+	}))
+	defer server.Close()
+
+	stalled, stalledWriter := io.Pipe()
+	defer stalledWriter.Close()
+	slowReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/retry/?uuid=slow&succeedAfter=0", stalled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slowReq.Header.Set("Content-Type", "application/json")
+	go func() {
+		if slowResp, slowErr := server.Client().Do(slowReq); slowErr == nil {
+			slowResp.Body.Close()
+		}
+	}()
+	// Part of the body is sent, and the other request waits until the server is reading it.
+	if _, writeErr := stalledWriter.Write([]byte(`{"prompt":`)); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	select {
+	case <-reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Expected the server to start reading the slow request's body")
+	}
+
+	otherReq, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/retry/?uuid=other&succeedAfter=0", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherReq.Header.Set("Content-Type", "application/json")
+	client := server.Client()
+	client.Timeout = 5 * time.Second
+	resp, err := client.Do(otherReq)
+	if err != nil {
+		t.Fatalf("Expected the other request to complete while the slow upload is stalled, but got %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status code %d, but got %d", http.StatusOK, resp.StatusCode)
+	}
+}
+
+// firstReadSignal calls signal before the first read of the wrapped body.
+type firstReadSignal struct {
+	io.ReadCloser
+	signal func()
+}
+
+func (f *firstReadSignal) Read(p []byte) (int, error) {
+	f.signal()
+	return f.ReadCloser.Read(p)
 }
 
 func TestWriteEchoResponseHeaders(t *testing.T) {
