@@ -127,7 +127,8 @@ func TestStatusHandler(t *testing.T) {
 
 func TestEchoHandler(t *testing.T) {
 	// Create an HTTP request to the / endpoint
-	req := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
+	body := strings.NewReader("body1")
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/", body)
 	rr := httptest.NewRecorder()
 
 	// Set up the context
@@ -173,6 +174,12 @@ func TestEchoHandler(t *testing.T) {
 	expectedNamespace := context.Namespace
 	if responseAssertions.Namespace != expectedNamespace {
 		t.Errorf("Expected X-Content-Type-Options header %s, but got %s", expectedNamespace, responseAssertions.Namespace)
+	}
+
+	// Test RequestAssertions contains content-length
+	var expectedContentLength int64 = 5
+	if responseAssertions.ContentLength != expectedContentLength {
+		t.Errorf("Expected Content-Length %d, but got %d", expectedContentLength, responseAssertions.ContentLength)
 	}
 }
 
