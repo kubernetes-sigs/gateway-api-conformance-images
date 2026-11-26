@@ -42,12 +42,13 @@ import (
 
 // RequestAssertions contains information about the request and the Ingress
 type RequestAssertions struct {
-	Path     string              `json:"path"`
-	Host     string              `json:"host"`
-	Method   string              `json:"method"`
-	Proto    string              `json:"proto"`
-	Headers  map[string][]string `json:"headers"`
-	HTTPPort string              `json:"httpPort"`
+	Path          string              `json:"path"`
+	Host          string              `json:"host"`
+	Method        string              `json:"method"`
+	Proto         string              `json:"proto"`
+	Headers       map[string][]string `json:"headers"`
+	HTTPPort      string              `json:"httpPort"`
+	ContentLength int64               `json:"contentLength"`
 
 	Context `json:",inline"`
 
@@ -305,7 +306,7 @@ func runH2CServer(h2cPort string, errchan chan<- error) {
 }
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Echoing back request made to %s to client (%s)\n", r.RequestURI, r.RemoteAddr)
+	fmt.Printf("Echoing back request made to %s to client (%s) with content-length: %d\n", r.RequestURI, r.RemoteAddr, r.ContentLength)
 
 	// If the request has form ?delay=[:duration] wait for duration
 	// For example, ?delay=10s will cause the response to wait 10s before responding
@@ -321,6 +322,7 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		r.Proto,
 		r.Header,
 		httpPort,
+		r.ContentLength,
 
 		context,
 
